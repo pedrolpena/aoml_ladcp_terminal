@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+*** GENERATED FROM project.xml - DO NOT EDIT  ***
+***         EDIT ../build.xml INSTEAD          ***
+-->
+<project name="AOML-LADCP-Terminal-impl" default="default" basedir="..">
+    <fail message="Please build using Ant 1.8.0 or higher.">
+        <condition>
+            <not>
+                <antversion atleast="1.8.0"/>
+            </not>
+        </condition>
+    </fail>
+    <property file="nbproject/project.properties"/>
+    
+    <property name="src.dir" value="src/main/java"/>
+    <property name="build.dir" value="build"/>
+    <property name="build.classes.dir" value="${build.dir}/classes"/>
+    <property name="dist.dir" value="dist"/>
+    <property name="dist.jar" value="${dist.dir}/AOML-LADCP-Terminal.jar"/>
+    
+    <path id="classpath">
+        <fileset dir="lib" includes="*.jar" erroronmissingdir="false"/>
+    </path>
+    
+    <target name="default" depends="jar" description="Build and create JAR"/>
+    
+    <target name="init">
+        <mkdir dir="${build.classes.dir}"/>
+        <mkdir dir="${dist.dir}"/>
+    </target>
+    
+    <target name="compile" depends="init" description="Compile source code">
+        <javac srcdir="${src.dir}" 
+               destdir="${build.classes.dir}" 
+               source="11" 
+               target="11"
+               includeantruntime="false"
+               debug="true">
+            <classpath refid="classpath"/>
+        </javac>
+        <copy todir="${build.classes.dir}">
+            <fileset dir="src/main/resources"/>
+        </copy>
+    </target>
+    
+    <target name="jar" depends="compile" description="Create JAR file">
+        <jar destfile="${dist.jar}" basedir="${build.classes.dir}">
+            <manifest>
+                <attribute name="Main-Class" value="com.aoml.ladcp.LADCPTerminalApp"/>
+                <attribute name="Class-Path" value=". lib/jSerialComm-2.11.0.jar lib/flatlaf-3.2.5.jar lib/slf4j-api-2.0.9.jar lib/logback-classic-1.4.11.jar lib/logback-core-1.4.11.jar"/>
+            </manifest>
+        </jar>
+        <copy todir="${dist.dir}/lib" flatten="true">
+            <fileset dir="lib" includes="*.jar"/>
+        </copy>
+    </target>
+    
+    <target name="run" depends="jar" description="Run the application">
+        <java jar="${dist.jar}" fork="true">
+            <arg value="--dual"/>
+        </java>
+    </target>
+    
+    <target name="clean" description="Clean build artifacts">
+        <delete dir="${build.dir}"/>
+        <delete dir="${dist.dir}"/>
+    </target>
+    
+    <target name="rebuild" depends="clean,jar" description="Clean and rebuild"/>
+</project>

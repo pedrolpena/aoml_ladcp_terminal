@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- FILE appender is created programmatically by LADCPUtils.enableFileLogging()
+         when the user enables it via Configuration > Enable File Logging.
+         It is NOT defined here to avoid creating the log file on disk at startup. -->
+
+    <logger name="com.aoml.ladcp" level="DEBUG"/>
+    <logger name="com.fazecast.jSerialComm" level="WARN"/>
+
+    <root level="INFO">
+        <appender-ref ref="STDOUT"/>
+    </root>
+</configuration>
