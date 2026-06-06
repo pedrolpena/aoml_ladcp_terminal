@@ -7,12 +7,14 @@ import com.aoml.ladcp.util.LADCPUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.imageio.ImageIO;
 import javax.swing.*;
 import javax.swing.filechooser.FileNameExtensionFilter;
 import java.awt.*;
 import java.awt.event.*;
 import java.io.*;
 import java.lang.reflect.InvocationTargetException;
+import java.net.URL;
 import java.nio.file.*;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
@@ -25,6 +27,9 @@ import java.util.concurrent.Future;
  */
 public class LADCPTerminalFrame extends JFrame {
     private static final Logger log = LoggerFactory.getLogger(LADCPTerminalFrame.class);
+
+    /** Classpath location of the application icon (bundled in the JAR). */
+    private static final String ICON_RESOURCE = "/icons/ladcp.png";
 
     // UI Components
     private TerminalPanel terminalPanel;
@@ -72,6 +77,7 @@ public class LADCPTerminalFrame extends JFrame {
     public LADCPTerminalFrame() {
         super("AOML LADCP Terminal");
         initializeUI();
+        setAppIcon();
         initializeTerminal();
         setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE);
         addWindowListener(new WindowAdapter() {
@@ -80,6 +86,27 @@ public class LADCPTerminalFrame extends JFrame {
                 closeApplication();
             }
         });
+    }
+
+    /**
+     * Loads the application icon (ladcp.png) from the classpath and applies it
+     * to this window's title bar / taskbar button. Falls back silently to the
+     * default icon if the resource is missing.
+     */
+    private void setAppIcon() {
+        try {
+            URL iconUrl = getClass().getResource(ICON_RESOURCE);
+            if (iconUrl != null) {
+                Image icon = ImageIO.read(iconUrl);
+                if (icon != null) {
+                    setIconImage(icon);
+                }
+            } else {
+                log.warn("Application icon resource not found: {}", ICON_RESOURCE);
+            }
+        } catch (Exception e) {
+            log.warn("Could not load application icon", e);
+        }
     }
 
     /**

@@ -12,11 +12,13 @@ import org.slf4j.LoggerFactory;
 import java.awt.*;
 import java.awt.event.*;
 import java.io.IOException;
+import java.net.URL;
 import java.nio.file.*;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.prefs.Preferences;
+import javax.imageio.ImageIO;
 import javax.swing.*;
 
 /**
@@ -35,6 +37,9 @@ public class DualTerminalFrame extends javax.swing.JFrame {
     
     private static final String APP_NAME = "AOML LADCP Terminal";
     private static final String VERSION = "1.0.0";
+
+    /** Classpath location of the application icon (bundled in the JAR). */
+    private static final String ICON_RESOURCE = "/icons/ladcp.png";
 
     // Preferences keys
     private static final String PREF_CRUISE = "cruise";
@@ -107,6 +112,7 @@ public class DualTerminalFrame extends javax.swing.JFrame {
     public DualTerminalFrame() {
         loadPreferences();
         initComponents();
+        setAppIcon();
         initMenuBar();
         initCustomComponents();
         initTerminals();
@@ -118,6 +124,27 @@ public class DualTerminalFrame extends javax.swing.JFrame {
                 closeApplication();
             }
         });
+    }
+
+    /**
+     * Loads the application icon (ladcp.png) from the classpath and applies it
+     * to this window's title bar / taskbar button. Falls back silently to the
+     * default icon if the resource is missing.
+     */
+    private void setAppIcon() {
+        try {
+            URL iconUrl = getClass().getResource(ICON_RESOURCE);
+            if (iconUrl != null) {
+                Image icon = ImageIO.read(iconUrl);
+                if (icon != null) {
+                    setIconImage(icon);
+                }
+            } else {
+                log.warn("Application icon resource not found: {}", ICON_RESOURCE);
+            }
+        } catch (Exception e) {
+            log.warn("Could not load application icon", e);
+        }
     }
 
     /**
@@ -1094,11 +1121,34 @@ public class DualTerminalFrame extends javax.swing.JFrame {
     }
 
     /**
+     * Sets the taskbar/dock icon where the platform uses a single process-wide
+     * image (notably the macOS Dock, and some Linux desktop environments).
+     * Uses the Java 9+ Taskbar API and silently no-ops where unsupported.
+     */
+    private static void setTaskbarIcon() {
+        try {
+            URL iconUrl = DualTerminalFrame.class.getResource(ICON_RESOURCE);
+            if (iconUrl != null && Taskbar.isTaskbarSupported()) {
+                Taskbar taskbar = Taskbar.getTaskbar();
+                if (taskbar.isSupported(Taskbar.Feature.ICON_IMAGE)) {
+                    taskbar.setIconImage(ImageIO.read(iconUrl));
+                }
+            }
+        } catch (Exception e) {
+            // Not supported on this platform/environment — the per-window
+            // icon set in setAppIcon() still applies.
+        }
+    }
+
+    /**
      * Main entry point for the terminal application.
      */
     public static void main(String[] args) {
         // Apply saved theme before creating any UI components
         applySavedTheme();
+
+        // Set the taskbar/dock icon (macOS Dock, some Linux DEs)
+        setTaskbarIcon();
 
         java.awt.EventQueue.invokeLater(new Runnable() {
             public void run() {
