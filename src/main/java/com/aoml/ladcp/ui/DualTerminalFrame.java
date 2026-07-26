@@ -59,6 +59,7 @@ public class DualTerminalFrame extends javax.swing.JFrame {
     private static final String PREF_DOWNLOOKER_PREFIX = "downlookerPrefix";
     private static final String PREF_DOWNLOOKER_SUFFIX = "downlookerSuffix";
     private static final String PREF_FILE_LOGGING = "fileLoggingEnabled";
+    private static final String PREF_DOUBLE_BREAK = "doubleBreakEnabled";
 
     // Preferences instance
     private final Preferences prefs = Preferences.userNodeForPackage(DualTerminalFrame.class);
@@ -105,6 +106,8 @@ public class DualTerminalFrame extends javax.swing.JFrame {
     private JRadioButtonMenuItem whiteSchemeItem;
     private JCheckBoxMenuItem fileLoggingCheckBox;
     private boolean fileLoggingEnabled;
+    private JCheckBoxMenuItem doubleBreakCheckBox;
+    private boolean doubleBreakEnabled;
 
     /**
      * Creates new form DualTerminalFrame
@@ -177,6 +180,7 @@ public class DualTerminalFrame extends javax.swing.JFrame {
         
         // File logging (default: disabled)
         fileLoggingEnabled = prefs.getBoolean(PREF_FILE_LOGGING, false);
+        doubleBreakEnabled = prefs.getBoolean(PREF_DOUBLE_BREAK, false);
         
         String logDirStr = prefs.get(PREF_LOG_DIR, null);
         if (logDirStr != null) {
@@ -237,6 +241,7 @@ public class DualTerminalFrame extends javax.swing.JFrame {
         prefs.put(PREF_DOWNLOOKER_PREFIX, downlookerPrefix);
         prefs.put(PREF_DOWNLOOKER_SUFFIX, downlookerSuffix);
         prefs.putBoolean(PREF_FILE_LOGGING, fileLoggingEnabled);
+        prefs.putBoolean(PREF_DOUBLE_BREAK, doubleBreakEnabled);
         
         if (logDirectory != null) {
             prefs.put(PREF_LOG_DIR, logDirectory.toString());
@@ -441,7 +446,15 @@ public class DualTerminalFrame extends javax.swing.JFrame {
         fileLoggingCheckBox.setToolTipText("Write debug log to ~/ladcp_logs/ladcp-terminal.log (disabled by default to save disk space)");
         fileLoggingCheckBox.addActionListener(e -> toggleFileLogging(fileLoggingCheckBox.isSelected()));
         configMenu.add(fileLoggingCheckBox);
-        
+
+        // Double-break toggle for the internal (blocking) wakeup routine
+        doubleBreakCheckBox = new JCheckBoxMenuItem("Double Break on Wakeup");
+        doubleBreakCheckBox.setSelected(doubleBreakEnabled);
+        doubleBreakCheckBox.setToolTipText("Internal command wakeups send two break signals instead of one, "
+                + "for instruments where a single break is unreliable. Does not affect the manual Wakeup button/menu.");
+        doubleBreakCheckBox.addActionListener(e -> toggleDoubleBreak(doubleBreakCheckBox.isSelected()));
+        configMenu.add(doubleBreakCheckBox);
+
         frameMenuBar.add(configMenu);
         
         // === Help Menu ===
@@ -640,6 +653,31 @@ public class DualTerminalFrame extends javax.swing.JFrame {
     }
 
     /**
+     * Toggles double-break behaviour for the internal wakeup routine on both
+     * terminals.  The manual Wakeup button/menu is unaffected (always single).
+     */
+    private void toggleDoubleBreak(boolean enabled) {
+        doubleBreakEnabled = enabled;
+        applyDoubleBreak();
+        savePreferences();
+        log.info("Double break on wakeup {}", enabled ? "enabled" : "disabled");
+    }
+
+    /**
+     * Pushes the current double-break setting to whichever terminal panels
+     * exist.  Safe to call repeatedly; panels remember the value across
+     * terminal (re)creation.
+     */
+    private void applyDoubleBreak() {
+        if (terminal1Panel != null) {
+            terminal1Panel.setDoubleBreakEnabled(doubleBreakEnabled);
+        }
+        if (terminal2Panel != null) {
+            terminal2Panel.setDoubleBreakEnabled(doubleBreakEnabled);
+        }
+    }
+
+    /**
      * Initializes the terminal panels based on current mode.
      */
     private void initTerminals() {
@@ -783,7 +821,9 @@ public class DualTerminalFrame extends javax.swing.JFrame {
             terminal2Panel.setConfig(downlookerPrefix, downlookerSuffix, cruise, stationCast);
             terminal2Panel.setDirectories(logDirectory, downloadDirectory, scriptsDirectory);
         }
-        
+
+        applyDoubleBreak();
+
         savePreferences();
     }
     

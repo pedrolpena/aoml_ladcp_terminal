@@ -293,20 +293,38 @@ public class SerialPortManager implements AutoCloseable {
             throw new SerialPortException("Port is not open");
         }
 
+        // An RDI instrument only wakes on a break asserted for its full
+        // duration.  This method is frequently invoked from a wakeup that has
+        // just PRE-EMPTED a running command sequence (see
+        // RDITerminal.wakeup / SingleTerminalPanel.interruptAndExecute), so the
+        // calling thread's interrupt flag is often set.  A plain Thread.sleep()
+        // would throw immediately, cutting the break to ~0ms and leaving the
+        // instrument asleep — the exact hang this class is trying to avoid.
+        // We therefore hold the break line until a wall-clock deadline,
+        // swallowing interrupts during the hold and restoring the flag after.
+        boolean wasInterrupted = Thread.interrupted();
         try {
             log.info("Sending break signal for {}ms", durationMs);
             serialPort.setBreak();
-            Thread.sleep(durationMs);
+            long deadline = System.currentTimeMillis() + durationMs;
+            long remaining;
+            while ((remaining = deadline - System.currentTimeMillis()) > 0) {
+                try {
+                    Thread.sleep(remaining);
+                } catch (InterruptedException e) {
+                    wasInterrupted = true;  // remember, but keep holding the break
+                }
+            }
             serialPort.clearBreak();
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            // Still clear break even if interrupted
+        } catch (Exception e) {
             if (serialPort != null) {
                 serialPort.clearBreak();
             }
-            throw new SerialPortException("Break interrupted", e);
-        } catch (Exception e) {
             throw new SerialPortException("Failed to send break", e);
+        } finally {
+            if (wasInterrupted) {
+                Thread.currentThread().interrupt();  // restore for cooperative cancellation
+            }
         }
     }
 

@@ -29,6 +29,8 @@ public class SingleTerminalPanel extends javax.swing.JPanel {
 
     private String terminalName;
     private RDITerminal terminal;
+    // Remembered so it can be re-applied each time the terminal is (re)created.
+    private boolean doubleBreakEnabled = false;
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private volatile Future<?> currentTask;
 
@@ -325,8 +327,24 @@ public class SingleTerminalPanel extends javax.swing.JPanel {
                 .stationCast("000_01")
                 .build();
 
+        terminal.setDoubleBreakEnabled(doubleBreakEnabled);
         terminal.addListener((event, t) -> SwingUtilities.invokeLater(() -> handleTerminalEvent(event)));
         updateStatus();
+    }
+
+    /**
+     * Enables/disables double-break in the internal (blocking) wakeup routine.
+     * The setting is remembered and re-applied whenever the terminal is
+     * (re)created.  Does not affect the manual Wakeup button/menu, which always
+     * sends a single break.
+     *
+     * @param enabled true to send two breaks in the internal wakeup
+     */
+    public void setDoubleBreakEnabled(boolean enabled) {
+        this.doubleBreakEnabled = enabled;
+        if (terminal != null) {
+            terminal.setDoubleBreakEnabled(enabled);
+        }
     }
     
     /**
@@ -635,9 +653,14 @@ public class SingleTerminalPanel extends javax.swing.JPanel {
         updateStatus();
     }
 
+    /**
+     * Handler for the Wakeup button and the Wakeup menu item.  Sends only the
+     * break signal and lets the response appear in the terminal — it does not
+     * wait for any reply.  Internal command flows use {@code terminal.wakeup()}.
+     */
     private void doWakeup() {
         try {
-            terminal.wakeup();
+            terminal.wakeupManual();
         } catch (SerialPortException e) {
             throw new RuntimeException(e);
         }

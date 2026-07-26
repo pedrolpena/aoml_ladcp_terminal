@@ -608,9 +608,14 @@ public class LADCPTerminalFrame extends JFrame {
         executeAsync(task);
     }
 
+    /**
+     * Handler for the Wakeup menu item.  Sends only the break signal and lets
+     * the response appear in the terminal — it does not wait for any reply.
+     * Internal command flows use {@code terminal.wakeup()}.
+     */
     private void doWakeup() {
         try {
-            terminal.wakeup();
+            terminal.wakeupManual();
         } catch (Exception e) {
             throw new RuntimeException("Wakeup failed: " + e.getMessage(), e);
         }

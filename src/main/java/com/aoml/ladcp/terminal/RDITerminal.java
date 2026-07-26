@@ -61,6 +61,12 @@ public class RDITerminal implements AutoCloseable {
     private boolean isListening = false;
     private volatile boolean cancelled = false;
 
+    // When true, the internal (blocking) wakeup() routine sends two break
+    // signals instead of one, for instruments/adapters where a single break is
+    // unreliable.  Default is a single break.  The manual Wakeup button/menu
+    // (wakeupManual) always sends a single break regardless of this flag.
+    private volatile boolean doubleBreakEnabled = false;
+
     // Data buffers
     private final StringBuilder displayBuffer = new StringBuilder();
     private final ByteArrayOutputStream rawBuffer = new ByteArrayOutputStream();
@@ -293,30 +299,35 @@ public class RDITerminal implements AutoCloseable {
     public void wakeup() throws SerialPortException {
         cancelled = false;  // Reset so commands after wakeup can proceed
         log.info("Waking up ADCP instrument");
-        
+
+        // wakeup() is the user's recovery action and is almost always invoked
+        // by pre-empting (cancelling + interrupting) a running command
+        // sequence.  It MUST run to completion regardless of that interrupt,
+        // otherwise the very break meant to rescue a hung instrument gets
+        // cut short.  Clear the interrupt flag up front and let the breaks
+        // and waits below complete normally.
+        Thread.interrupted();
+
         changeBaud(defaultBaud);
         startListening();
-        try {
-            Thread.sleep(100);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
+        sleepUninterruptibly(100);
         clearBuffer();
-        
-        // First break - often fails or partially wakes the instrument
+
+        // Single break by default.  A second break is sent only when the
+        // operator has enabled "double break" in the configuration menu, for
+        // instruments/adapters where one break is unreliable.
         portManager.sendBreak(BREAK_DURATION_MS);
-        
-        try {
-            Thread.sleep(500); // Wait a bit before second break
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
+
+        if (doubleBreakEnabled) {
+            sleepUninterruptibly(500); // settle before the second break
+            clearBuffer();
+            portManager.sendBreak(BREAK_DURATION_MS);
         }
-        
-        clearBuffer();
-        
-        // Second break - usually succeeds
-        portManager.sendBreak(BREAK_DURATION_MS);
-        
+
+        // sendBreak restores the interrupt flag if it swallowed one while
+        // holding the line; clear it so the banner wait below isn't aborted.
+        Thread.interrupted();
+
         try {
             String banner = waitFor(">", 5000);
             
@@ -336,6 +347,38 @@ public class RDITerminal implements AutoCloseable {
         }
         
         notifyListeners(TerminalEvent.INSTRUMENT_IDENTIFIED);
+    }
+
+    /**
+     * Manual wakeup for the Wakeup button and the Wakeup menu item.
+     * <p>
+     * This method <em>only</em> asserts the break signal and returns
+     * immediately.  It does <strong>not</strong> wait for any response — no
+     * ">" prompt wait, no timeout, no instrument identification.  Whatever the
+     * instrument sends back (banner, prompt, garbage) simply flows to the
+     * terminal display via the background update thread, exactly like issuing
+     * a break from a standalone terminal emulator.
+     * <p>
+     * This is intentionally distinct from {@link #wakeup()}.  Internal callers
+     * that need a confirmed ">" prompt or the instrument type (setup sends,
+     * {@link #wakeIfSleeping()}, sleep, downloads, etc.) must keep using
+     * {@link #wakeup()} — do not route them through this method.
+     *
+     * @throws SerialPortException if communication fails
+     */
+    public void wakeupManual() throws SerialPortException {
+        cancelled = false;      // allow subsequent commands to proceed
+        Thread.interrupted();   // clear any pre-empting interrupt so the break holds full duration
+        log.info("Manual wakeup: sending break, not waiting for a response");
+
+        changeBaud(defaultBaud);
+        startListening();
+        sleepUninterruptibly(100);
+        clearBuffer();
+
+        // Single break.  The instrument's response is what the operator sees
+        // in the terminal.  Deliberately no waitFor() here.
+        portManager.sendBreak(BREAK_DURATION_MS);
     }
 
     /**
@@ -364,21 +407,12 @@ public class RDITerminal implements AutoCloseable {
      * @throws SerialPortException if communication fails
      */
     public void sleep() throws SerialPortException {
-        log.info("Putting ADCP to sleep");
-        changeBaud(defaultBaud);
-        wakeIfSleeping();
-        
+        // Send only the CZ (power-down) command.  No baud change, no TS/wakeup
+        // preamble, and no blocking wait — the instrument's "Powering Down"
+        // response still appears in the terminal via the background update
+        // thread.  This matches simply typing "CZ" in the command field.
+        log.info("Putting ADCP to sleep (CZ)");
         portManager.writeCommand("CZ");
-        
-        try {
-            if (instrumentType == InstrumentType.BROADBAND) {
-                waitFor("[POWERING DOWN .....]", 2000);
-            } else {
-                waitFor("Powering Down", 5000);
-            }
-        } catch (TimeoutException e) {
-            log.warn("Timeout waiting for sleep confirmation");
-        }
     }
 
     /**
@@ -462,12 +496,24 @@ public class RDITerminal implements AutoCloseable {
             String trimmedCmd = cmd.trim();
             if (!trimmedCmd.isEmpty()) {
                 log.debug("Sending command: {}", trimmedCmd);
+                // Mark the buffer position BEFORE writing so a fast echo+prompt
+                // cannot land ahead of the wait and be missed.
+                int mark = markPosition();
                 portManager.writeCommand(trimmedCmd);
                 try {
-                    waitForPrompt(PROMPT_TIMEOUT_MS);
+                    waitForPrompt(mark, PROMPT_TIMEOUT_MS);
                 } catch (TimeoutException e) {
-                    log.warn("Timeout waiting for prompt after command: {} (waited {}ms of inactivity)",
+                    // No ">" after PROMPT_TIMEOUT_MS of silence.  Abort instead
+                    // of dribbling the remaining commands one-per-timeout into
+                    // an unresponsive instrument — that behaviour is what made a
+                    // stuck send look like a multi-minute "hang" while leaving
+                    // the ADCP half-programmed.  Surface it so the operator can
+                    // wake the instrument and resend.
+                    log.warn("No prompt after command '{}' ({}ms of silence); aborting setup send",
                             trimmedCmd, PROMPT_TIMEOUT_MS);
+                    insertComment("No response after '" + trimmedCmd
+                            + "' — aborting setup send. Wake the instrument (Send Break / Wakeup) and resend.");
+                    return;
                 }
             }
         }
@@ -496,8 +542,10 @@ public class RDITerminal implements AutoCloseable {
             String trimmedCmd = cmd.trim();
             if (!trimmedCmd.isEmpty()) {
                 log.debug("Sending command: {}", trimmedCmd);
+                // Mark the buffer position BEFORE writing (see sendCommandsNoTimeout).
+                int mark = markPosition();
                 portManager.writeCommand(trimmedCmd);
-                waitForPrompt(timeoutMs);
+                waitForPrompt(mark, timeoutMs);
             }
         }
     }
@@ -658,8 +706,14 @@ public class RDITerminal implements AutoCloseable {
      * @throws IOException         if command file cannot be read
      */
     public void sendSetup(Path cmdFile) throws SerialPortException, IOException {
-        wakeIfSleeping();
-        
+        // Do NOT send a break/wakeup here.  The operator is expected to have
+        // already put the instrument in a known, awake state using the manual
+        // Wakeup button/menu before sending a script.  We simply ensure the
+        // port is listening and then stream the commands.  (Per-command prompt
+        // timeouts still abort the send if the instrument turns out to be
+        // asleep — see sendCommandsNoTimeout.)
+        startListening();
+
         log.info("Sending command file: {}", cmdFile);
         insertComment("Sending command file: " + cmdFile);
         
@@ -1042,6 +1096,20 @@ public class RDITerminal implements AutoCloseable {
     }
 
     /**
+     * Captures the current end of the display buffer.  Callers should invoke
+     * this <em>before</em> writing a command and pass the result to
+     * {@link #waitForPrompt(int, int)}, so the prompt wait only considers data
+     * that arrives after the command was sent and cannot miss a fast echo.
+     *
+     * @return Current display buffer length
+     */
+    private int markPosition() {
+        synchronized (bufferLock) {
+            return displayBuffer.length();
+        }
+    }
+
+    /**
      * Waits for the ">" prompt in data received AFTER this method is called.
      * <p>
      * This is an inactivity-based wait: the timeout resets every time new
@@ -1056,13 +1124,10 @@ public class RDITerminal implements AutoCloseable {
      * @param timeoutMs Inactivity timeout in milliseconds
      * @throws TimeoutException if the prompt is not received after {@code timeoutMs} of silence
      */
-    private void waitForPrompt(int timeoutMs) throws TimeoutException {
-        int startPos;
-        synchronized (bufferLock) {
-            startPos = displayBuffer.length();
-        }
-
-        // Track the high-water mark so we only scan new characters
+    private void waitForPrompt(int startPos, int timeoutMs) throws TimeoutException {
+        // Track the high-water mark so we only scan new characters.  startPos
+        // is captured by the caller BEFORE the command is written (see
+        // markPosition), so a prompt echoed back quickly is never skipped.
         int scannedUpTo = startPos;
         long lastActivityTime = System.currentTimeMillis();
 
@@ -1261,10 +1326,52 @@ public class RDITerminal implements AutoCloseable {
         return ZonedDateTime.now(ZoneOffset.UTC).format(LOG_TIME_FORMAT);
     }
 
+    /**
+     * Sleeps for the given number of milliseconds, ignoring interrupts.
+     * <p>
+     * Used inside {@link #wakeup()} where the timing between breaks must be
+     * honored even when the wakeup pre-empts (and therefore interrupts) a
+     * running command sequence.  The interrupt status is restored after the
+     * full delay so cooperative cancellation elsewhere still works.
+     *
+     * @param millis Delay in milliseconds
+     */
+    private static void sleepUninterruptibly(long millis) {
+        long deadline = System.currentTimeMillis() + millis;
+        boolean wasInterrupted = false;
+        long remaining;
+        while ((remaining = deadline - System.currentTimeMillis()) > 0) {
+            try {
+                Thread.sleep(remaining);
+            } catch (InterruptedException e) {
+                wasInterrupted = true;
+            }
+        }
+        if (wasInterrupted) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
     // ==================== Getters and Setters ====================
 
     public InstrumentType getInstrumentType() {
         return instrumentType;
+    }
+
+    /**
+     * Enables or disables double-break behaviour in the internal, blocking
+     * {@link #wakeup()} routine.  When enabled, wakeup() sends two break
+     * signals instead of one.  Has no effect on {@link #wakeupManual()}, which
+     * always sends a single break.
+     *
+     * @param enabled true to send two breaks in wakeup()
+     */
+    public void setDoubleBreakEnabled(boolean enabled) {
+        this.doubleBreakEnabled = enabled;
+    }
+
+    public boolean isDoubleBreakEnabled() {
+        return doubleBreakEnabled;
     }
 
     public String getDevicePath() {
